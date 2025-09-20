@@ -1,0 +1,523 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Student Store Manager</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, onSnapshot, setDoc, getDoc, collection, query, where, getDocs, setLogLevel, addDoc } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // Firebase Config and Initialization
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+        const firebaseConfig = JSON.parse(typeof __firebase_config !== 'undefined' ? __firebase_config : '{}');
+
+        let db, auth;
+        let userId;
+        let inventory = [];
+        let currentSale = [];
+        let authReady = false;
+        let salesHistory = [];
+
+        setLogLevel('debug');
+
+        // Image mapping for items
+        const itemImages = {
+            'Dr. Pepper': 'https://images.pexels.com/photos/13599788/pexels-photo-13599788.jpeg',
+            'Coke': 'https://images.pexels.com/photos/11256166/pexels-photo-11256166.jpeg',
+            'Sprite': 'https://images.pexels.com/photos/31332092/pexels-photo-31332092.jpeg',
+            'Root Beer': 'https://i5.walmartimages.com/asr/79a81785-94d2-4c70-96c2-dc5cc08267bf.67ecd9f4d21a054d64e554d559cc6d8a.jpeg?odnHeight=768&odnWidth=768&odnBg=FFFFFF',
+            'Arizona': 'https://m.media-amazon.com/images/I/71yJEM1F5KL._UF894,1000_QL80_.jpg',
+            'Water': 'https://i5.walmartimages.com/asr/b5bc06f5-7208-4e64-ba92-7be43b474d16.5cbc4d93cd2d649a66a73b9e7250dc05.jpeg?odnHeight=768&odnWidth=768&odnBg=FFFFFF',
+            'Lays BBQ': 'https://digitalassets.pepsico.com/m/686dfab31afbb342/Std_Res-00028400199612_C1C1.jpg',
+            'Lays Limon': 'https://i5.walmartimages.com/seo/Lay-s-Potato-Chips-Limon-Flavored-2-5-oz-Bag_52a5c8ba-50cb-4ff4-adf8-408d448e6b62.32ea9eb2a98fd9cca40a8aa3ab252c97.jpeg',
+            'Hot Cheetos': 'https://m.media-amazon.com/images/I/51dLcB7bhRL._UF894,1000_QL80_.jpg',
+            'Hot Fries': 'https://www.kroger.com/product/images/large/front/0002840070569',
+            'Takis': 'https://m.media-amazon.com/images/I/71zws4oJQhL._UF350,350_QL80_.jpg',
+            'Sour Patch Kids': 'https://www.mashed.com/img/gallery/the-untold-truth-of-sour-patch-kids/intro-1645637848.jpg',
+            'Sour Patch Watermelon': 'https://grandpajoescandyshop.com/wp-content/uploads/2022/01/Sour-Patch-Kids-Watermelon-2oz-Bag-WEBP-File.webp',
+            'Hi Chews': 'https://candyfunhouse.com/cdn/shop/products/Candyfunhouse_morinaga_hichew_sweetnsour_watermelon_50g-Side-jpg-1.jpg?v=1686239469',
+            'Red Sour Punch Straws': 'https://images.heb.com/is/image/HEBGrocery/000546581-1',
+            'Blue Sour Punch Straws': 'https://shop.americanlicorice.com/cdn/shop/files/piseun4kgrtrxlmjoijz.webp?v=1747774315',
+            'Skittles': 'https://allcitycandy.com/cdn/shop/products/skittlesbagfront_2048x.jpg?v=1655747526',
+            'Sour Skittles': 'https://i5.walmartimages.com/asr/191be336-cf7f-4755-8c68-736a78919956.a166dbfae3de2f98a24aea323ff037a1.jpeg',
+            'Ice Cream Sandwich': 'https://i.etsystatic.com/37919000/r/il/a8f226/6627445737/il_1588xN.6627445737_gl5k.jpg',
+            'Mini Muffins': 'https://bfasset.costco-static.com/U447IH35/as/546r3nfjjhgbrzk7nfmqqn/1333848-847__1?auto=webp&format=jpg&width=600&height=600&fit=bounds&canvas=600,600'
+        };
+
+
+        function initializeFirebase() {
+            try {
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+
+                // On Auth State Change Listener
+                onAuthStateChanged(auth, async (user) => {
+                    if (user) {
+                        userId = user.uid;
+                        document.getElementById('user-id-display').textContent = `User ID: ${userId}`;
+                        authReady = true;
+                        setupRealtimeListener();
+                    } else {
+                        // User is signed out.
+                        userId = null;
+                        document.getElementById('user-id-display').textContent = 'User ID: N/A';
+                        authReady = false;
+                    }
+                });
+
+            } catch (error) {
+                console.error("Error initializing Firebase:", error);
+                document.getElementById('message-box-content').textContent = 'Error: Failed to initialize Firebase. Check console for details.';
+                document.getElementById('message-box').classList.remove('hidden');
+            }
+        }
+
+        async function authenticateUser() {
+            try {
+                if (typeof __initial_auth_token !== 'undefined') {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (error) {
+                console.error("Error authenticating:", error);
+                document.getElementById('message-box-content').textContent = 'Error: Failed to authenticate user. Check console for details.';
+                document.getElementById('message-box').classList.remove('hidden');
+            }
+        }
+
+        // Setup real-time listener for inventory
+        function setupRealtimeListener() {
+            if (!db) return; // User ID is no longer needed for public data
+            const inventoryDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'store_data', 'inventory');
+            onSnapshot(inventoryDocRef, (docSnap) => {
+                if (docSnap.exists()) {
+                    inventory = docSnap.data().items || [];
+                    renderInventory();
+                } else {
+                    inventory = [];
+                    renderInventory();
+                    // Initialize with your new, customized data if the document doesn't exist
+                    setDoc(inventoryDocRef, { items: [
+                        { name: 'Dr. Pepper', price: 2.00, stock: 0, category: 'Drinks' },
+                        { name: 'Coke', price: 2.00, stock: 0, category: 'Drinks' },
+                        { name: 'Sprite', price: 2.00, stock: 0, category: 'Drinks' },
+                        { name: 'Root Beer', price: 2.00, stock: 0, category: 'Drinks' },
+                        { name: 'Arizona', price: 2.00, stock: 0, category: 'Drinks' },
+                        { name: 'Water', price: 1.00, stock: 0, category: 'Drinks' },
+                        { name: 'Lays BBQ', price: 2.00, stock: 0, category: 'Chips' },
+                        { name: 'Lays Limon', price: 2.00, stock: 0, category: 'Chips' },
+                        { name: 'Hot Cheetos', price: 2.00, stock: 0, category: 'Chips' },
+                        { name: 'Hot Fries', price: 2.00, stock: 0, category: 'Chips' },
+                        { name: 'Takis', price: 1.00, stock: 0, category: 'Chips' },
+                        { name: 'Sour Patch Kids', price: 2.00, stock: 0, category: 'Candy' },
+                        { name: 'Sour Patch Watermelon', price: 2.00, stock: 0, category: 'Candy' },
+                        { name: 'Hi Chews', price: 2.00, stock: 0, category: 'Candy' },
+                        { name: 'Red Sour Punch Straws', price: 2.00, stock: 0, category: 'Candy' },
+                        { name: 'Blue Sour Punch Straws', price: 2.00, stock: 0, category: 'Candy' },
+                        { name: 'Skittles', price: 2.00, stock: 0, category: 'Candy' },
+                        { name: 'Sour Skittles', price: 2.00, stock: 0, category: 'Candy' },
+                        { name: 'Ice Cream Sandwich', price: 1.00, stock: 0, category: 'Other' },
+                        { name: 'Mini Muffins', price: 1.00, stock: 0, category: 'Other' }
+                    ]});
+                }
+            }, (error) => {
+                console.error("Error getting inventory data:", error);
+                document.getElementById('message-box-content').textContent = 'Error: Failed to load inventory. Check console for details.';
+                document.getElementById('message-box').classList.remove('hidden');
+            });
+        }
+
+        // Render functions
+        function renderInventory() {
+            const inventoryList = document.getElementById('inventory-list');
+            inventoryList.innerHTML = '';
+            
+            const categorizedItems = inventory.reduce((acc, item) => {
+                const category = item.category || 'Uncategorized';
+                if (!acc[category]) {
+                    acc[category] = [];
+                }
+                acc[category].push(item);
+                return acc;
+            }, {});
+
+            for (const category in categorizedItems) {
+                const categorySection = document.createElement('div');
+                categorySection.className = 'bg-white p-4 rounded-xl shadow-inner mb-6';
+                categorySection.innerHTML = `<h3 class="text-xl font-bold text-gray-700 mb-3">${category}</h3>`;
+                
+                const itemListDiv = document.createElement('div');
+                itemListDiv.className = 'space-y-3';
+                categorizedItems[category].forEach(item => {
+                    const itemDiv = document.createElement('div');
+                    itemDiv.className = 'flex items-center justify-between p-4 bg-gray-100 rounded-lg shadow-sm';
+                    const imageUrl = itemImages[item.name] || 'https://placehold.co/64x64/f3f4f6/000000?text=Item';
+                    itemDiv.innerHTML = `
+                        <div class="flex items-center space-x-4">
+                            <img src="${imageUrl}" alt="${item.name}" class="w-16 h-16 rounded-full object-cover shadow-sm">
+                            <div>
+                                <span class="font-semibold text-lg">${item.name}</span>
+                                <span class="block text-gray-500 text-sm">Stock: ${item.stock}</span>
+                            </div>
+                        </div>
+                        <div class="text-xl font-bold text-green-600">$${item.price.toFixed(2)}</div>
+                        <div class="ml-4 flex space-x-2">
+                            <button onclick="addToSale('${item.name}')" class="bg-blue-500 text-white px-3 py-1 rounded-full text-sm hover:bg-blue-600 transition-colors">Add to Sale</button>
+                            <button onclick="showRestockModal('${item.name}')" class="bg-yellow-500 text-white px-3 py-1 rounded-full text-sm hover:bg-yellow-600 transition-colors">Restock</button>
+                        </div>
+                    `;
+                    itemListDiv.appendChild(itemDiv);
+                });
+                categorySection.appendChild(itemListDiv);
+                inventoryList.appendChild(categorySection);
+            }
+        }
+
+        function updateSaleSummary() {
+            const saleSummaryDiv = document.getElementById('sale-summary');
+            const total = currentSale.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+            const discountInput = document.getElementById('discount-input');
+            let discountAmount = parseFloat(discountInput.value) || 0;
+            if (discountAmount > total) {
+                discountAmount = total;
+                discountInput.value = total.toFixed(2);
+            }
+            const finalTotal = total - discountAmount;
+
+            saleSummaryDiv.innerHTML = `
+                <div class="flex justify-between font-bold text-lg text-gray-700">
+                    <span>Subtotal:</span>
+                    <span>$${total.toFixed(2)}</span>
+                </div>
+                <div class="flex justify-between text-lg text-red-500">
+                    <span>Discount:</span>
+                    <span>-$${discountAmount.toFixed(2)}</span>
+                </div>
+                <div class="flex justify-between font-extrabold text-2xl mt-4 text-green-700">
+                    <span>Total:</span>
+                    <span>$${finalTotal.toFixed(2)}</span>
+                </div>
+            `;
+            document.getElementById('sale-items').innerHTML = currentSale.map(item => `
+                <div class="flex justify-between items-center text-sm text-gray-600 py-1 border-b last:border-b-0">
+                    <span>${item.name} x ${item.quantity}</span>
+                    <span>$${(item.price * item.quantity).toFixed(2)}</span>
+                </div>
+            `).join('');
+        }
+
+        // Inventory and Sale Logic
+        window.addToSale = (itemName) => {
+            const item = inventory.find(i => i.name === itemName);
+            if (!item) {
+                showMessageBox('Error: Item not found.');
+                return;
+            }
+
+            const existingItem = currentSale.find(i => i.name === itemName);
+            if (existingItem) {
+                if (existingItem.quantity + 1 > item.stock) {
+                    showMessageBox('Not enough stock to add another item.');
+                    return;
+                }
+                existingItem.quantity += 1;
+            } else {
+                if (1 > item.stock) {
+                    showMessageBox('Not enough stock to add this item.');
+                    return;
+                }
+                currentSale.push({ name: item.name, price: item.price, quantity: 1 });
+            }
+            updateSaleSummary();
+        };
+
+        window.applyDiscount = () => {
+            updateSaleSummary();
+        };
+
+        window.completeSale = async () => {
+            if (currentSale.length === 0) {
+                showMessageBox('Please add items to the sale first.');
+                return;
+            }
+
+            if (!authReady || !db) {
+                showMessageBox('Authentication not ready. Please wait a moment.');
+                return;
+            }
+
+            const newInventory = [...inventory];
+            for (const soldItem of currentSale) {
+                const inventoryItem = newInventory.find(i => i.name === soldItem.name);
+                if (inventoryItem) {
+                    inventoryItem.stock -= soldItem.quantity;
+                    if (inventoryItem.stock < 0) {
+                        showMessageBox('Error: Stock count went below zero. Sale cancelled.');
+                        return; // Cancel sale if stock is insufficient
+                    }
+                }
+            }
+            
+            const subtotal = currentSale.reduce((sum, item) => sum + (item.price * item.quantity), 0);
+            const discount = parseFloat(document.getElementById('discount-input').value) || 0;
+            const total = subtotal - discount;
+
+            const saleRecord = {
+                date: new Date().toISOString(),
+                items: currentSale,
+                subtotal: subtotal,
+                discount: discount,
+                total: total
+            };
+
+            try {
+                // Update inventory in public path
+                const inventoryDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'store_data', 'inventory');
+                await setDoc(inventoryDocRef, { items: newInventory });
+
+                // Add sale record to public path
+                const salesCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'store_data', 'sales_history');
+                await addDoc(salesCollectionRef, saleRecord);
+
+                currentSale = [];
+                updateSaleSummary();
+                document.getElementById('discount-input').value = '';
+                showMessageBox('Sale completed successfully!');
+            } catch (error) {
+                console.error("Error completing sale:", error);
+                showMessageBox('Error: Failed to complete sale. Check console for details.');
+            }
+        };
+
+        window.showRestockModal = (itemName) => {
+            const restockModal = document.getElementById('restock-modal');
+            const restockItemName = document.getElementById('restock-item-name');
+            const restockItemInput = document.getElementById('restock-quantity');
+            restockItemName.textContent = itemName;
+            restockItemInput.value = '';
+            restockModal.classList.remove('hidden');
+        };
+
+        window.restockItem = async () => {
+            const itemName = document.getElementById('restock-item-name').textContent;
+            const quantityInput = document.getElementById('restock-quantity');
+            const quantity = parseInt(quantityInput.value, 10);
+
+            if (isNaN(quantity) || quantity <= 0) {
+                showMessageBox('Please enter a valid positive number for restock quantity.');
+                return;
+            }
+
+            const item = inventory.find(i => i.name === itemName);
+            if (!item) {
+                showMessageBox('Error: Item not found.');
+                return;
+            }
+
+            const newInventory = [...inventory];
+            const updatedItem = newInventory.find(i => i.name === itemName);
+            if (updatedItem) {
+                updatedItem.stock += quantity;
+            }
+
+            try {
+                const inventoryDocRef = doc(db, 'artifacts', appId, 'public', 'data', 'store_data', 'inventory');
+                await setDoc(inventoryDocRef, { items: newInventory });
+                hideRestockModal();
+                showMessageBox(`${itemName} restocked successfully with ${quantity} units.`);
+            } catch (error) {
+                console.error("Error restocking item:", error);
+                showMessageBox('Error: Failed to restock. Check console for details.');
+            }
+        };
+
+        window.hideRestockModal = () => {
+            document.getElementById('restock-modal').classList.add('hidden');
+        };
+
+        window.toggleSalesHistory = async () => {
+            const salesHistorySection = document.getElementById('sales-history-section');
+            if (salesHistorySection.classList.contains('hidden')) {
+                salesHistorySection.classList.remove('hidden');
+                await fetchSalesHistory();
+            } else {
+                salesHistorySection.classList.add('hidden');
+            }
+        };
+        
+        async function fetchSalesHistory() {
+            if (!db || !authReady) return;
+            const salesCollectionRef = collection(db, 'artifacts', appId, 'public', 'data', 'store_data', 'sales_history');
+            try {
+                const querySnapshot = await getDocs(salesCollectionRef);
+                salesHistory = [];
+                querySnapshot.forEach(doc => {
+                    salesHistory.push({ id: doc.id, ...doc.data() });
+                });
+                renderSalesHistory();
+            } catch (error) {
+                console.error("Error fetching sales history:", error);
+                showMessageBox('Error: Failed to load sales history. Check console for details.');
+            }
+        };
+        
+        function renderSalesHistory() {
+            const salesList = document.getElementById('sales-list');
+            salesList.innerHTML = '';
+            if (salesHistory.length === 0) {
+                salesList.innerHTML = '<p class="text-gray-500 text-center">No sales recorded yet.</p>';
+                return;
+            }
+            salesHistory.forEach(sale => {
+                const saleDiv = document.createElement('div');
+                saleDiv.className = 'bg-white p-4 rounded-lg shadow-sm border border-gray-200';
+                const saleDate = new Date(sale.date);
+                saleDiv.innerHTML = `
+                    <div class="flex justify-between items-center text-sm text-gray-600 border-b pb-2 mb-2">
+                        <span>Sale on: ${saleDate.toLocaleDateString()} at ${saleDate.toLocaleTimeString()}</span>
+                        <span class="font-bold text-lg text-green-700">$${sale.total.toFixed(2)}</span>
+                    </div>
+                    <ul class="text-sm text-gray-500 list-disc list-inside space-y-1">
+                        ${sale.items.map(item => `<li>${item.name} x ${item.quantity} ($${(item.price * item.quantity).toFixed(2)})</li>`).join('')}
+                    </ul>
+                    ${sale.discount > 0 ? `<div class="mt-2 text-sm text-red-500">Discount: -$${sale.discount.toFixed(2)}</div>` : ''}
+                `;
+                salesList.appendChild(saleDiv);
+            });
+        };
+
+        window.exportToCSV = () => {
+            if (salesHistory.length === 0) {
+                showMessageBox('No sales data to export.');
+                return;
+            }
+
+            const header = ["Date", "Time", "Items", "Subtotal", "Discount", "Total"];
+            const rows = salesHistory.map(sale => {
+                const saleDate = new Date(sale.date);
+                const date = saleDate.toLocaleDateString();
+                const time = saleDate.toLocaleTimeString();
+                const items = sale.items.map(item => `${item.name} (${item.quantity})`).join('; ');
+                const subtotal = sale.subtotal.toFixed(2);
+                const discount = sale.discount.toFixed(2);
+                const total = sale.total.toFixed(2);
+                // Use JSON.stringify to handle commas in item names
+                return [date, time, `"${items}"`, subtotal, discount, total].join(',');
+            });
+
+            let csvContent = header.join(',') + '\n' + rows.join('\n');
+            const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+            const link = document.createElement("a");
+            const url = URL.createObjectURL(blob);
+            link.setAttribute("href", url);
+            link.setAttribute("download", "student_store_sales.csv");
+            link.style.visibility = 'hidden';
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+        };
+
+        // Message Box functionality
+        function showMessageBox(message) {
+            document.getElementById('message-box-content').textContent = message;
+            document.getElementById('message-box').classList.remove('hidden');
+        }
+
+        window.closeMessageBox = () => {
+            document.getElementById('message-box').classList.add('hidden');
+        };
+
+        // Initialize on window load
+        window.onload = () => {
+            initializeFirebase();
+            authenticateUser();
+        };
+
+    </script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+    </style>
+</head>
+<body class="bg-gray-50 flex items-center justify-center min-h-screen p-4 sm:p-8">
+    <div class="w-full max-w-4xl bg-white rounded-2xl shadow-xl overflow-hidden transform transition-all duration-300">
+        <!-- Header -->
+        <div class="bg-blue-600 text-white p-6 sm:p-8 flex flex-col sm:flex-row items-center justify-between">
+            <h1 class="text-3xl sm:text-4xl font-extrabold tracking-tight mb-2 sm:mb-0">Student Store</h1>
+            <div id="user-id-display" class="text-sm font-light text-blue-200 truncate">Loading User ID...</div>
+        </div>
+
+        <div class="p-6 sm:p-8 space-y-8">
+            <!-- Inventory Section -->
+            <div class="bg-gray-50 p-6 rounded-xl shadow-md space-y-4">
+                <h2 class="text-2xl font-bold text-gray-800">Current Inventory</h2>
+                <div id="inventory-list" class="space-y-3">
+                    <!-- Inventory items will be rendered here -->
+                </div>
+            </div>
+
+            <!-- Sale Section -->
+            <div class="bg-gray-50 p-6 rounded-xl shadow-md">
+                <h2 class="text-2xl font-bold text-gray-800 mb-4">Make a Sale</h2>
+                <div class="space-y-4">
+                    <div id="sale-items" class="bg-white p-3 rounded-lg border border-gray-200 min-h-[50px]">
+                        <!-- Items in sale will be rendered here -->
+                    </div>
+                    
+                    <div class="flex items-center space-x-2">
+                        <label for="discount-input" class="text-gray-600 font-medium">Discount ($)</label>
+                        <input type="number" id="discount-input" placeholder="0.00" oninput="applyDiscount()" class="flex-1 px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 text-right"/>
+                    </div>
+                    
+                    <div id="sale-summary" class="bg-white p-4 rounded-lg shadow-inner">
+                        <!-- Sale summary will be rendered here -->
+                    </div>
+
+                    <button onclick="completeSale()" class="w-full bg-green-500 text-white py-3 rounded-lg font-bold text-lg hover:bg-green-600 transition-colors shadow-lg">Complete Sale</button>
+                </div>
+            </div>
+
+            <div class="flex justify-center">
+                <button onclick="toggleSalesHistory()" class="bg-gray-500 text-white px-6 py-2 rounded-full font-bold text-sm hover:bg-gray-600 transition-colors shadow-lg">View Sales History</button>
+            </div>
+
+            <!-- Sales History Section -->
+            <div id="sales-history-section" class="bg-gray-50 p-6 rounded-xl shadow-md hidden">
+                <div class="flex justify-between items-center mb-4">
+                    <h2 class="text-2xl font-bold text-gray-800">Sales History</h2>
+                    <button onclick="exportToCSV()" class="bg-teal-500 text-white px-4 py-2 rounded-full text-sm hover:bg-teal-600 transition-colors">Export to CSV</button>
+                </div>
+                <div id="sales-list" class="space-y-4 max-h-96 overflow-y-auto">
+                    <!-- Sales will be rendered here -->
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Restock Modal -->
+    <div id="restock-modal" class="fixed inset-0 bg-gray-900 bg-opacity-50 flex items-center justify-center p-4 hidden">
+        <div class="bg-white p-6 rounded-xl shadow-2xl w-full max-w-sm transform scale-95 transition-transform duration-300">
+            <h3 class="text-xl font-bold mb-4">Restock <span id="restock-item-name" class="text-blue-600"></span></h3>
+            <label for="restock-quantity" class="block text-sm font-medium text-gray-700 mb-2">Quantity to Add</label>
+            <input type="number" id="restock-quantity" class="w-full px-4 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Enter quantity">
+            <div class="mt-6 flex justify-end space-x-3">
+                <button onclick="hideRestockModal()" class="px-4 py-2 text-gray-600 rounded-lg hover:bg-gray-200 transition-colors">Cancel</button>
+                <button onclick="restockItem()" class="px-4 py-2 bg-yellow-500 text-white rounded-lg hover:bg-yellow-600 transition-colors">Restock</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Message Box (Alert/Notification) -->
+    <div id="message-box" class="fixed bottom-4 left-1/2 -translate-x-1/2 bg-gray-800 text-white px-6 py-3 rounded-full shadow-lg z-50 hidden transition-all duration-300">
+        <span id="message-box-content"></span>
+        <button onclick="closeMessageBox()" class="ml-4 text-white opacity-75 hover:opacity-100">&times;</button>
+    </div>
+</body>
+</html>
